@@ -1,21 +1,27 @@
-# AllfindFlight production stack for Portainer.
+# AllfindFlight production stack (Ubuntu nativo + docker compose).
 #
 # Convivencia con otros stacks en el mismo VPS:
-#   - Postgres escucha internamente en 55432 (no 5432) por convención.
+#   - Postgres escucha internamente en 55432 (no 5432).
 #   - Redis escucha en 56379 (no 6379).
 #   - Ningún puerto se publica al host: ingress entra solo por Cloudflare Tunnel.
-#   - Volúmenes prefijados (Portainer los nombra <stack>_<volume>).
+#   - Containers, volúmenes y red prefijados aff-*.
 #
 # Cloudflare Tunnel routing (Zero Trust > Networks > Tunnels > Public hostnames):
 #   vuelos.planetour.cloud       -> http://frontend:3000
 #   vuelos-ops.planetour.cloud   -> http://frontend:3000   (alias opcional)
 #
-# Variables de stack a definir en Portainer:
-#   POSTGRES_PASSWORD       (requerida, fuerte)
+# Variables (definidas en infra/.env.prod, ver .env.prod.example):
+#   POSTGRES_PASSWORD       (requerida)
 #   TUNNEL_TOKEN            (requerida, del tunnel de Cloudflare)
 #   REGISTRY                (default ghcr.io/nipko)
 #   IMAGE_TAG               (default latest)
 #   GOOGLE_MAPS_API_KEY, AMADEUS_*, TRAVELPAYOUTS_TOKEN, PROXY_URL  (opcionales)
+#
+# Operación:
+#   primer arranque:  sudo /opt/allfindflight/infra/deploy.sh
+#   updates:          sudo /opt/allfindflight/infra/deploy.sh
+#   logs:             sudo docker logs -f <container>
+#   apagar:           docker compose -f infra/docker-compose.prod.yml --env-file infra/.env.prod down
 
 services:
   postgres:

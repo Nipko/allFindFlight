@@ -34,7 +34,7 @@ npm run dev
 
 ## Despliegue
 
-Producción en VPS con Portainer + Cloudflare Tunnel: ver [`infra/DEPLOY.md`](infra/DEPLOY.md).
+Producción en VPS Ubuntu nativo + Cloudflare Tunnel: ver [`infra/DEPLOY.md`](infra/DEPLOY.md).
 Imágenes se publican automáticamente a GHCR vía GitHub Actions en cada push a `main`.
 
 ## Estructura
