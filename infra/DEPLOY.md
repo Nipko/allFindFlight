@@ -1,55 +1,78 @@
-# Despliegue en VPS con Portainer + Cloudflare Tunnel
+# Despliegue: VPS Ubuntu + Portainer + Cloudflare Tunnel
 
 Stack: Postgres + Redis + Backend (FastAPI) + Worker (Celery) + Frontend (Next.js) + cloudflared.
-Dominio público: `planetour.cloud`. Sin puertos expuestos al host: todo el tráfico entra vía Cloudflare Tunnel.
+Hostname público sugerido: **`vuelos.planetour.cloud`** (alternativo: `vuelos-ops.planetour.cloud`).
+Postgres interno en `55432`, Redis en `56379` para no chocar con otros stacks del VPS.
+Sin puertos publicados al host: todo el ingress entra por Cloudflare Tunnel.
 
 ---
 
-## 1. Prerrequisitos
+## 0. Hostnames sugeridos (no usar `api`/`admin` para evitar colisiones)
 
-- VPS con Docker + Portainer instalados.
-- Dominio `planetour.cloud` activo en Cloudflare (DNS apuntando a Cloudflare, modo "Full" recomendado).
-- Cloudflare Zero Trust habilitado (gratis hasta 50 usuarios).
-- Imágenes de las apps publicadas en un registry accesible desde el VPS (GHCR, Docker Hub, registry privado).
+| Subdominio | Apunta a | Uso |
+|---|---|---|
+| `vuelos.planetour.cloud` | `http://frontend:3000` | App principal |
+| `vuelos-ops.planetour.cloud` | `http://frontend:3000` | Alias para acceso restringido (opcional) |
 
-## 2. Construir y publicar imágenes
+> El backend no necesita subdominio propio: el frontend Next.js reenvía `/api/*` al servicio `backend` por la red Docker interna.
 
-Desde tu máquina o un runner CI:
+---
+
+## 1. Bootstrap del VPS (Ubuntu 22.04/24.04 limpio)
+
+Instala Docker + Portainer + UFW. Como root:
 
 ```bash
-# Backend
-docker build -t ghcr.io/nipko/allfind-backend:latest ./backend
-docker push ghcr.io/nipko/allfind-backend:latest
-
-# Frontend
-docker build -t ghcr.io/nipko/allfind-frontend:latest ./frontend
-docker push ghcr.io/nipko/allfind-frontend:latest
+curl -fsSL https://raw.githubusercontent.com/Nipko/allFindFlight/main/infra/setup-vps.sh | sudo bash
 ```
 
-Si el VPS necesita autenticarse contra GHCR/Docker Hub, configurar credenciales en Portainer en
-**Registries**.
+Al terminar:
+- Portainer en `https://<IP-VPS>:9443` (crea admin user en el primer acceso).
+- UFW abierto solo para SSH y `9443/tcp`. Nada más.
 
-> Más adelante conviene mover esto a GitHub Actions para builds automáticos en cada push a `main`.
+---
 
-## 3. Crear el Cloudflare Tunnel
+## 2. GitHub Actions: variables y secretos
 
-1. Cloudflare dashboard → **Zero Trust** → **Networks** → **Tunnels** → **Create a tunnel**.
-2. Conector: **Cloudflared**. Nombre: `planetour-vps`.
-3. En el paso "Install connector" copia el **token** (cadena larga `eyJ...`). No descargues nada — el contenedor `cloudflared` del stack hace el trabajo.
-4. En **Public Hostnames** del tunnel, añade:
+**Variables a configurar: NINGUNA.** El workflow `.github/workflows/build-images.yml` usa `GITHUB_TOKEN` (auto-provisionado) y publica las imágenes en GHCR.
 
-   | Subdomain | Domain          | Service                  |
-   | --------- | --------------- | ------------------------ |
-   | (vacío)   | planetour.cloud | `http://frontend:3000`   |
-   | www       | planetour.cloud | `http://frontend:3000`   |
+Lo que SÍ tienes que hacer una sola vez:
 
-   El service name `frontend` resuelve dentro de la red Docker `internal`.
+1. **Permisos de Actions sobre el repo**
+   - GitHub repo → Settings → Actions → General → "Workflow permissions" → marcar **Read and write permissions**.
+   - Equivalente: el workflow ya pide `permissions: { packages: write }` por job, así que esto es redundante pero no estorba.
 
-5. Cloudflare crea automáticamente registros CNAME en tu zona DNS apuntando al tunnel. No tocar.
+2. **Visibilidad de los packages publicados** (la primera vez que el workflow corre):
+   - GitHub user → Packages → `allfind-backend` → Package settings → **Change visibility → Public**.
+   - Repetir con `allfind-frontend`.
+   - Esto evita tener que dar credenciales al VPS para `docker pull`.
+
+3. **Si prefieres mantener las imágenes privadas:** configurar registry credentials en Portainer.
+   - Crear un PAT en GitHub: Settings → Developer settings → Personal access tokens → **Classic** → `read:packages`.
+   - Portainer → Registries → **Add registry** → "Custom" → URL `ghcr.io`, username = tu usuario GitHub, password = ese PAT.
+   - El stack lo usará automáticamente al hacer pull.
+
+> Resumen: si haces los packages públicos (recomendado para uso personal sin secretos en imagen), no necesitas configurar nada más.
+
+---
+
+## 3. Cloudflare Tunnel
+
+1. Cloudflare Dashboard → **Zero Trust** → **Networks** → **Tunnels** → **Create a tunnel**.
+2. Connector: **Cloudflared**. Nombre sugerido: `planetour-vps`.
+3. En "Install connector", **copia el token** (cadena `eyJ...`). No descargues nada — el contenedor `cloudflared` del stack hace el trabajo.
+4. **Public Hostnames** del tunnel:
+
+   | Subdomain | Domain | Service |
+   |---|---|---|
+   | `vuelos` | `planetour.cloud` | `http://frontend:3000` |
+   | `vuelos-ops` | `planetour.cloud` | `http://frontend:3000` |
+
+5. Cloudflare crea automáticamente los CNAME en tu zona DNS apuntando al tunnel.
+
+---
 
 ## 4. Desplegar el stack en Portainer
-
-### Opción A — Repositorio Git (recomendada)
 
 1. Portainer → **Stacks** → **Add stack**.
 2. Nombre: `allfindflight`.
@@ -57,58 +80,78 @@ Si el VPS necesita autenticarse contra GHCR/Docker Hub, configurar credenciales 
 4. Repository URL: `https://github.com/Nipko/allFindFlight`.
 5. Reference: `refs/heads/main`.
 6. Compose path: `infra/docker-compose.prod.yml`.
-7. **Environment variables** → cargar desde el archivo `.env.prod` o pegar manualmente:
-   - `POSTGRES_PASSWORD`
-   - `TUNNEL_TOKEN`
-   - `REGISTRY` (si no usas el default `ghcr.io/nipko`)
-   - `IMAGE_TAG` (default `latest`)
-   - APIs opcionales: `GOOGLE_MAPS_API_KEY`, `AMADEUS_CLIENT_ID`, etc.
-8. **Deploy the stack**.
+7. **Environment variables**:
+   ```
+   POSTGRES_PASSWORD=<contraseña-fuerte>
+   TUNNEL_TOKEN=<token-de-cloudflare>
+   REGISTRY=ghcr.io/nipko        (opcional; este es el default)
+   IMAGE_TAG=latest              (opcional)
+   GOOGLE_MAPS_API_KEY=          (opcional, para tiempos de traslado)
+   AMADEUS_CLIENT_ID=            (opcional)
+   AMADEUS_CLIENT_SECRET=        (opcional)
+   TRAVELPAYOUTS_TOKEN=          (opcional)
+   PROXY_URL=                    (opcional, para scrapers)
+   ```
+8. Activa **Pull and redeploy** y **Re-pull image**.
+9. **Deploy the stack**.
 
-### Opción B — Web editor
+> Si `nipko` no es tu usuario de GitHub, ajusta `REGISTRY` (por ejemplo `ghcr.io/tu-usuario`).
 
-Pegar el contenido de `infra/docker-compose.prod.yml` directamente en el editor de Portainer y
-configurar las env vars. Útil para un primer despliegue manual.
+---
 
 ## 5. Inicializar la base de datos
 
-La primera vez (o tras un reset de volumen) hay que cargar los aeropuertos:
+Una sola vez (o tras un reset de volumen):
 
-En Portainer → contenedor `allfind-backend` → **Console** → conectar con shell `/bin/sh`:
+Portainer → contenedor `aff-backend` → **Console** → conectar (`/bin/sh`):
 
 ```sh
 python -m app.scripts.seed_airports
 ```
 
-Tarda ~30 segundos. El comando es idempotente.
+Carga ~10k aeropuertos comerciales con índice H3. Idempotente.
+
+---
 
 ## 6. Verificación
 
-- `https://planetour.cloud` debería cargar el frontend.
-- `https://planetour.cloud/api/search?origin=MAD&destination=BCN&departure=2026-07-15` debería responder JSON.
-- `https://planetour.cloud/api/../health` (proxiado por Next.js) → `{"status":"ok"}`.
+- `https://vuelos.planetour.cloud` → frontend.
+- `https://vuelos.planetour.cloud/api/search?origin=MAD&destination=BCN&departure=2026-07-15` → JSON con ofertas.
+- Logs en Portainer: contenedor → **Logs**. Empezar por `aff-cloudflared` (debe decir "Registered tunnel connection").
 
-Logs en Portainer: contenedor → **Logs** (cloudflared, backend, worker, frontend).
+---
 
-## 7. Actualizaciones
+## 7. Updates
 
-Tras un push a `main` con cambios, build de las nuevas imágenes y en Portainer:
-- Stacks → `allfindflight` → **Pull and redeploy** (si está enlazado al repo).
-- O bien `Stacks → allfindflight → Editor → Update the stack` con `Re-pull image` activado.
+Cada push a `main` dispara el workflow → publica `:latest` y `:sha-xxxxxxx` en GHCR.
+Para aplicar:
+
+- Portainer → Stacks → `allfindflight` → **Pull and redeploy**.
+- O cambia `IMAGE_TAG` a un sha específico para fijar versión / hacer rollback.
+
+---
 
 ## 8. Backups
 
-Volúmenes a respaldar: `allfindflight_postgres-data`. Redis es cache + cola, no necesita backup.
+Solo Postgres importa:
 
 ```bash
-# en el VPS
-docker run --rm -v allfindflight_postgres-data:/data -v $(pwd):/backup alpine \
-  tar czf /backup/postgres-$(date +%F).tgz -C /data .
+docker run --rm \
+  -v allfindflight_aff-postgres-data:/data \
+  -v $(pwd):/backup alpine \
+  tar czf /backup/aff-postgres-$(date +%F).tgz -C /data .
 ```
 
-## 9. Seguridad
+Redis es cache + cola, no se respalda.
 
-- Ningún puerto está publicado al host (`ports:` ausente en todos los servicios). El único acceso público es vía Cloudflare Tunnel.
-- Cloudflare puede añadir WAF, rate limiting y Access (autenticación de email para acceso restringido) sin tocar el stack.
-- Postgres y Redis solo son alcanzables desde la red Docker `internal`.
-- Rotar `POSTGRES_PASSWORD` y `TUNNEL_TOKEN` regularmente. Ambos viven solo en variables de entorno de la stack en Portainer.
+---
+
+## 9. Coexistencia con otros stacks en el mismo VPS
+
+Garantizado por:
+- Postgres en `55432`, Redis en `56379` (no 5432/6379).
+- Containers prefijados `aff-*`.
+- Volúmenes prefijados `aff-*`.
+- Red Docker dedicada `aff-internal`.
+- Sin puertos publicados al host.
+- Hostname `vuelos.planetour.cloud` (no `api`/`admin`/`app`/raíz).

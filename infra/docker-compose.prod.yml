@@ -1,67 +1,67 @@
 # AllfindFlight production stack for Portainer.
 #
-# Deploy as a Portainer Stack:
-#   1. Repository URL: https://github.com/Nipko/allFindFlight
-#   2. Compose path: infra/docker-compose.prod.yml
-#   3. Environment variables (Portainer "Environment variables" panel):
-#        POSTGRES_PASSWORD       (required, strong)
-#        TUNNEL_TOKEN            (required, from Cloudflare Zero Trust)
-#        GOOGLE_MAPS_API_KEY     (optional)
-#        AMADEUS_CLIENT_ID       (optional)
-#        AMADEUS_CLIENT_SECRET   (optional)
-#        TRAVELPAYOUTS_TOKEN     (optional)
-#        PROXY_URL               (optional, for scrapers)
-#        IMAGE_TAG               (optional, defaults to "latest")
-#        REGISTRY                (optional, e.g. ghcr.io/nipko)
+# Convivencia con otros stacks en el mismo VPS:
+#   - Postgres escucha internamente en 55432 (no 5432) por convención.
+#   - Redis escucha en 56379 (no 6379).
+#   - Ningún puerto se publica al host: ingress entra solo por Cloudflare Tunnel.
+#   - Volúmenes prefijados (Portainer los nombra <stack>_<volume>).
 #
-# Cloudflare Tunnel routing (configure in Cloudflare Zero Trust dashboard):
-#   planetour.cloud  -> http://frontend:3000
-#   www.planetour.cloud -> http://frontend:3000  (optional)
-# No port is published to the host. All ingress goes through cloudflared.
+# Cloudflare Tunnel routing (Zero Trust > Networks > Tunnels > Public hostnames):
+#   vuelos.planetour.cloud       -> http://frontend:3000
+#   vuelos-ops.planetour.cloud   -> http://frontend:3000   (alias opcional)
+#
+# Variables de stack a definir en Portainer:
+#   POSTGRES_PASSWORD       (requerida, fuerte)
+#   TUNNEL_TOKEN            (requerida, del tunnel de Cloudflare)
+#   REGISTRY                (default ghcr.io/nipko)
+#   IMAGE_TAG               (default latest)
+#   GOOGLE_MAPS_API_KEY, AMADEUS_*, TRAVELPAYOUTS_TOKEN, PROXY_URL  (opcionales)
 
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: allfind-postgres
+    container_name: aff-postgres
     restart: unless-stopped
+    command: ["postgres", "-p", "55432"]
     environment:
-      POSTGRES_USER: allfind
+      POSTGRES_USER: aff
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
-      POSTGRES_DB: allfind
+      POSTGRES_DB: aff
+      PGPORT: "55432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - aff-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U allfind"]
+      test: ["CMD-SHELL", "pg_isready -U aff -p 55432"]
       interval: 10s
       timeout: 3s
       retries: 5
-    networks: [internal]
+    networks: [aff-internal]
 
   redis:
     image: redis:7-alpine
-    container_name: allfind-redis
+    container_name: aff-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--port", "56379", "--appendonly", "yes"]
     volumes:
-      - redis-data:/data
+      - aff-redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "56379", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
-    networks: [internal]
+    networks: [aff-internal]
 
   backend:
     image: ${REGISTRY:-ghcr.io/nipko}/allfind-backend:${IMAGE_TAG:-latest}
-    container_name: allfind-backend
+    container_name: aff-backend
     restart: unless-stopped
     environment:
       ENV: production
       LOG_LEVEL: INFO
-      DATABASE_URL: postgresql+psycopg://allfind:${POSTGRES_PASSWORD}@postgres:5432/allfind
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      DATABASE_URL: postgresql+psycopg://aff:${POSTGRES_PASSWORD}@postgres:55432/aff
+      REDIS_URL: redis://redis:56379/0
+      CELERY_BROKER_URL: redis://redis:56379/1
+      CELERY_RESULT_BACKEND: redis://redis:56379/2
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
       AMADEUS_CLIENT_ID: ${AMADEUS_CLIENT_ID:-}
       AMADEUS_CLIENT_SECRET: ${AMADEUS_CLIENT_SECRET:-}
@@ -78,20 +78,20 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    networks: [internal]
+    networks: [aff-internal]
 
   worker:
     image: ${REGISTRY:-ghcr.io/nipko}/allfind-backend:${IMAGE_TAG:-latest}
-    container_name: allfind-worker
+    container_name: aff-worker
     restart: unless-stopped
     command: ["celery", "-A", "app.workers.celery_app", "worker", "-l", "info", "--concurrency=2"]
     environment:
       ENV: production
       LOG_LEVEL: INFO
-      DATABASE_URL: postgresql+psycopg://allfind:${POSTGRES_PASSWORD}@postgres:5432/allfind
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      DATABASE_URL: postgresql+psycopg://aff:${POSTGRES_PASSWORD}@postgres:55432/aff
+      REDIS_URL: redis://redis:56379/0
+      CELERY_BROKER_URL: redis://redis:56379/1
+      CELERY_RESULT_BACKEND: redis://redis:56379/2
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
       AMADEUS_CLIENT_ID: ${AMADEUS_CLIENT_ID:-}
       AMADEUS_CLIENT_SECRET: ${AMADEUS_CLIENT_SECRET:-}
@@ -102,11 +102,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [internal]
+    networks: [aff-internal]
 
   frontend:
     image: ${REGISTRY:-ghcr.io/nipko}/allfind-frontend:${IMAGE_TAG:-latest}
-    container_name: allfind-frontend
+    container_name: aff-frontend
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -114,11 +114,11 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    networks: [internal]
+    networks: [aff-internal]
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    container_name: allfind-cloudflared
+    container_name: aff-cloudflared
     restart: unless-stopped
     command: ["tunnel", "--no-autoupdate", "run", "--token", "${TUNNEL_TOKEN}"]
     environment:
@@ -126,12 +126,12 @@ services:
     depends_on:
       frontend:
         condition: service_started
-    networks: [internal]
+    networks: [aff-internal]
 
 volumes:
-  postgres-data:
-  redis-data:
+  aff-postgres-data:
+  aff-redis-data:
 
 networks:
-  internal:
+  aff-internal:
     driver: bridge
