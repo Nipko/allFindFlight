@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+.turbo/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (no comitear datasets pesados)
+data/airports.csv
+data/runways.csv
+data/*.parquet
+data/*.sqlite
+
+# Logs
+*.log
+logs/
+
+# Docker
+.docker-data/
+
+# Playwright
+playwright-report/
+test-results/
