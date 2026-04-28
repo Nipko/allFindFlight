@@ -119,19 +119,20 @@ sudo /opt/allfindflight/infra/deploy.sh
 
 Para fijar versión / rollback: editar `IMAGE_TAG` en `.env.prod` a un sha concreto y volver a correr `deploy.sh`.
 
-### Auto-update opcional (Watchtower)
+### Auto-update con Watchtower (incluido)
 
-Si quieres que el VPS pull cada N minutos sin intervención, añadir a la lista de servicios del compose:
+El stack ya incluye un servicio `watchtower` que cada 5 min pull los tags actuales de las imágenes etiquetadas y reinicia los containers afectados con `--rolling-restart` (un servicio a la vez para evitar downtime).
 
-```yaml
-  watchtower:
-    image: containrrr/watchtower
-    container_name: aff-watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 300 --cleanup aff-backend aff-worker aff-frontend
-```
+- Solo se actualizan los containers con la label `com.centurylinklabs.watchtower.enable=true`: **backend, worker, frontend**.
+- No se tocan: `cloudflared`, `postgres`, `redis` (versiones pinneadas o conexiones que no conviene cortar automáticamente).
+- Logs:
+  ```bash
+  sudo docker logs -f aff-watchtower
+  ```
+- Para desactivarlo temporalmente: `sudo docker stop aff-watchtower`.
+- Para forzar un check inmediato sin esperar al intervalo: `sudo docker exec aff-watchtower /watchtower --run-once aff-backend aff-worker aff-frontend` (o simplemente `sudo /opt/allfindflight/infra/deploy.sh`).
+
+> Si prefieres updates 100% manuales, comentar el bloque `watchtower:` del compose y volver a desplegar.
 
 ---
 
